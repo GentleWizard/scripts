@@ -344,7 +344,7 @@ uninstall_godot() {
     fi
 
     log "Godot uninstallation process completed."
-    log "Note: Your Godot projects and user data have not been removed."
+    log "Note: Your Godot projects been removed."
 }
 
 
