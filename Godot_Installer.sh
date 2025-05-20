@@ -263,61 +263,90 @@ install_godot() {
 }
 
 uninstall_godot() {
+    # Use parameter expansion to safely get the version argument, defaulting to empty if not provided.
     local version="$1"
 
     if [[ -z "$version" ]]; then
-        log "Uninstalling all Godot versions..."
+        # If no version is specified, uninstall all versions and related files.
+        log "Uninstalling all Godot versions and related files..."
         # Remove all Godot installation directories if the base directory exists
         if [[ -d "$GODOT_BASE" ]]; then
             rm -rf "$GODOT_BASE"
             log "Removed all Godot installations from $GODOT_BASE"
         fi
+
+        # Remove general Godot related files (symlink, installer script, desktop entry, icon)
+        if [[ -f "$BIN_DIR/godot" ]]; then
+            rm -f "$BIN_DIR/godot"
+        fi
+
+        if [[ -f "$INSTALLER_PATH" ]]; then
+            rm -f "$INSTALLER_PATH"
+        fi
+
+        if [[ -f "$DESKTOP_DIR/godot.desktop" ]]; then
+            rm -f "$DESKTOP_DIR/godot.desktop"
+        fi
+
+        if [[ -f "$ICON_PATH" ]]; then
+            rm -f "$ICON_PATH"
+        fi
+
     else
+        # If a specific version is specified, validate it and uninstall only that version.
+        validate_version "$version" # Validate the version format
         log "Uninstalling Godot version: $version..."
         local install_dir="$GODOT_BASE/$version"
         # Check if the specific version's directory exists before attempting to remove it
         if [[ ! -d "$install_dir" ]]; then
             error "Godot version $version not found at $install_dir"
         fi
+
+        local current_linked_version
+        current_linked_version=$(readlink -f "$BIN_DIR/godot" | sed -n 's|.*/godot/\([0-9.]\+\)/.*|\1|p')
+
         rm -rf "$install_dir" # Removes the specified Godot version directory
         log "Removed Godot version $version"
 
-        # Check if the uninstalled version was the one currently symlinked as 'godot'
-        local current_linked_version
-        current_linked_version=$(readlink -f "$BIN_DIR/godot" | sed -n 's|.*/godot/\([0-9.]\+\)/.*|\1|p')
+        # If the uninstalled version was the one currently symlinked as 'godot'
         if [[ "$current_linked_version" == "$version" ]]; then
-            log "The uninstalled version was the currently linked 'godot' executable."
-            log "Removing the symlink from $BIN_DIR/godot. You may need to link a new version manually."
-            rm -f "$BIN_DIR/godot" # Removes the symlink if it pointed to the uninstalled version
+            rm -f "$BIN_DIR/godot" # Remove the old symlink
+
+            local installed_versions=()
+            while IFS= read -r -d $'\0' version_dir; do
+                installed_versions+=("$(basename "$version_dir")")
+            done < <(find "$GODOT_BASE" -mindepth 1 -maxdepth 1 -type d -print0)
+
+            if [[ ${#installed_versions[@]} -gt 0 ]]; then
+                # Sort versions in reverse order to get the latest
+                IFS=$'\n' installed_versions=($(sort -rV <<<"${installed_versions[*]}"))
+                unset IFS
+
+                local latest_version="${installed_versions[0]}"
+                local latest_install_dir="$GODOT_BASE/$latest_version"
+                local godot_bin
+                godot_bin=$(find "$latest_install_dir" -type f -name 'Godot*' -executable -print -quit)
+
+                if [[ -n "$godot_bin" ]]; then
+                    ln -s "$godot_bin" "$BIN_DIR/godot"
+                    log "Automatically switched to latest installed version: $latest_version"
+                    create_desktop_entry "$latest_version"
+                else
+                    log "No executable found for the latest version $latest_version. Please re-install it if needed."
+                    log "No other Godot versions found to switch to. Godot symlink removed."
+                    rm -f "$DESKTOP_DIR/godot.desktop" # Remove desktop entry if no Godot is linked
+                fi
+            else
+                log "No other Godot versions found to switch to. Godot symlink removed."
+                rm -f "$DESKTOP_DIR/godot.desktop" # Remove desktop entry if no Godot is linked
+            fi
         fi
-    fi
-
-    # Remove general Godot related files (symlink, installer script, desktop entry, icon)
-    # These removals happen regardless of whether a specific version was targeted or all.
-    # Only remove the main 'godot' symlink if no other Godot versions are present in the base directory
-    if [[ -f "$BIN_DIR/godot" && ! -d "$GODOT_BASE" ]]; then
-        log "Removing symlink $BIN_DIR/godot (no other Godot versions found)."
-        rm -f "$BIN_DIR/godot"
-    fi
-
-    if [[ -f "$INSTALLER_PATH" ]]; then
-        log "Removing installer script: $INSTALLER_PATH"
-        rm -f "$INSTALLER_PATH" # Removes the installer script itself
-    fi
-
-    if [[ -f "$DESKTOP_DIR/godot.desktop" ]]; then
-        log "Removing desktop entry: $DESKTOP_DIR/godot.desktop"
-        rm -f "$DESKTOP_DIR/godot.desktop" # Removes the desktop entry file
-    fi
-
-    if [[ -f "$ICON_PATH" ]]; then
-        log "Removing icon: $ICON_PATH"
-        rm -f "$ICON_PATH" # Removes the Godot icon
     fi
 
     log "Godot uninstallation process completed."
     log "Note: Your Godot projects and user data have not been removed."
 }
+
 
 clean_old_versions() {
     local current_version
@@ -384,7 +413,7 @@ main() {
             install_godot "${2:-}"
             ;;
         "uninstall")
-            uninstall_godot
+            uninstall_godot "${2:-}"
             ;;
         "clean")
             clean_old_versions
